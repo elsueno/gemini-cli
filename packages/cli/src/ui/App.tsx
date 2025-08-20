@@ -101,6 +101,9 @@ import { SettingsDialog } from './components/SettingsDialog.js';
 import { setUpdateHandler } from '../utils/handleAutoUpdate.js';
 import { appEvents, AppEvent } from '../utils/events.js';
 import { isNarrowWidth } from './utils/isNarrowWidth.js';
+import { QuestionManager } from '../services/questionManager.js';
+import { HttpServerService } from '../services/httpServerService.js';
+import { TuiIntegration } from '../services/tuiIntegration.js';
 
 const CTRL_EXIT_PROMPT_DURATION_MS = 1000;
 // Maximum number of queued messages to display in UI to prevent performance issues
@@ -111,6 +114,7 @@ interface AppProps {
   settings: LoadedSettings;
   startupWarnings?: string[];
   version: string;
+  httpPort?: number;
 }
 
 export const AppWrapper = (props: AppProps) => {
@@ -129,7 +133,7 @@ export const AppWrapper = (props: AppProps) => {
   );
 };
 
-const App = ({ config, settings, startupWarnings = [], version }: AppProps) => {
+const App = ({ config, settings, startupWarnings = [], version, httpPort }: AppProps) => {
   const isFocused = useFocus();
   useBracketedPaste();
   const [updateInfo, setUpdateInfo] = useState<UpdateObject | null>(null);
@@ -209,6 +213,53 @@ const App = ({ config, settings, startupWarnings = [], version }: AppProps) => {
   >();
   const [showEscapePrompt, setShowEscapePrompt] = useState(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+
+  // HTTP Server state
+  const questionManagerRef = useRef<QuestionManager | null>(null);
+  const httpServerRef = useRef<HttpServerService | null>(null);
+  const tuiIntegrationRef = useRef<TuiIntegration | null>(null);
+
+  // Initialize HTTP server services if httpPort is provided
+  useEffect(() => {
+    if (httpPort) {
+      const questionManager = new QuestionManager();
+      const tuiIntegration = new TuiIntegration();
+      const httpServer = new HttpServerService(httpPort, questionManager);
+
+      // Wire up callbacks
+      tuiIntegration.setCallbacks({
+        onResponseComplete: (questionId, response) => {
+          questionManager.notifyResponseComplete(questionId, response);
+        },
+        onError: (questionId, error) => {
+          questionManager.notifyError(questionId, error);
+        },
+      });
+
+      httpServer.setSubmitHandler((text, questionId) => {
+        tuiIntegration.submitQuestion(text, questionId);
+      });
+
+      // Store refs
+      questionManagerRef.current = questionManager;
+      httpServerRef.current = httpServer;
+      tuiIntegrationRef.current = tuiIntegration;
+
+      // Start server
+      httpServer.start().catch((error) => {
+        console.error('Failed to start HTTP server:', error);
+        addItem({
+          type: MessageType.ERROR,
+          text: `Failed to start HTTP server on port ${httpPort}: ${error.message}`,
+        }, Date.now());
+      });
+
+      // Cleanup on unmount
+      return () => {
+        httpServer.stop().catch(console.error);
+      };
+    }
+  }, [httpPort, addItem]);
 
   useEffect(() => {
     const unsubscribe = ideContext.subscribeToIdeContext(setIdeContextState);
@@ -632,6 +683,54 @@ const App = ({ config, settings, startupWarnings = [], version }: AppProps) => {
   );
 
   const { handleInput: vimHandleInput } = useVim(buffer, handleFinalSubmit);
+
+  // Register TUI components with HTTP integration
+  useEffect(() => {
+    if (tuiIntegrationRef.current) {
+      tuiIntegrationRef.current.registerInputPrompt(buffer, handleFinalSubmit);
+    }
+  }, [buffer, handleFinalSubmit]);
+
+  // Monitor streaming state for response completion
+  const lastStreamingStateRef = useRef(streamingState);
+  useEffect(() => {
+    if (tuiIntegrationRef.current && lastStreamingStateRef.current !== StreamingState.Idle && streamingState === StreamingState.Idle) {
+      // Response completed - capture the latest response from history
+      const currentQuestionId = tuiIntegrationRef.current.getCurrentQuestionId();
+      if (currentQuestionId) {
+        // Look for the most recent Gemini response (could be 'gemini' or 'gemini_content')
+        let geminiResponse = null;
+        let responseText = '';
+
+        // Search backwards through recent history items for Gemini responses
+        for (let i = history.length - 1; i >= 0; i--) {
+          const item = history[i];
+          if (item.type === 'gemini' || item.type === 'gemini_content') {
+            if (!geminiResponse) {
+              geminiResponse = item;
+              responseText = (item as any).text || '';
+            } else {
+              // If we find multiple gemini items, concatenate them (for streamed responses)
+              const additionalText = (item as any).text || '';
+              responseText = additionalText + ' ' + responseText;
+            }
+          } else if (item.type === 'user' || item.type === 'user_shell') {
+            // Stop when we hit the user's question to avoid going too far back
+            break;
+          }
+        }
+
+        if (geminiResponse && responseText.trim()) {
+          console.log('Response completed for question:', currentQuestionId, 'Response:', responseText.trim());
+
+          // Notify TUI integration which will call back to QuestionManager
+          tuiIntegrationRef.current.notifyResponseComplete(currentQuestionId, responseText.trim());
+        }
+      }
+    }
+    lastStreamingStateRef.current = streamingState;
+  }, [streamingState, history]);
+
   const pendingHistoryItems = [...pendingSlashCommandHistoryItems];
   pendingHistoryItems.push(...pendingGeminiHistoryItems);
 

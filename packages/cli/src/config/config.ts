@@ -73,6 +73,7 @@ export interface CliArgs {
   listExtensions: boolean | undefined;
   proxy: string | undefined;
   includeDirectories: string[] | undefined;
+  httpPort: number | undefined;
 }
 
 export async function parseArguments(): Promise<CliArgs> {
@@ -228,6 +229,11 @@ export async function parseArguments(): Promise<CliArgs> {
           coerce: (dirs: string[]) =>
             // Handle comma-separated values
             dirs.flatMap((dir) => dir.split(',').map((d) => d.trim())),
+        })
+        .option('http-port', {
+          type: 'number',
+          description: 'Start HTTP server on specified port for programmatic access',
+          default: process.env.GEMINI_HTTP_PORT ? parseInt(process.env.GEMINI_HTTP_PORT, 10) : undefined,
         })
 
         .check((argv) => {

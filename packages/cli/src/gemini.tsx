@@ -313,6 +313,7 @@ export async function main() {
             settings={settings}
             startupWarnings={startupWarnings}
             version={version}
+            httpPort={argv.httpPort}
           />
         </SettingsContext.Provider>
       </React.StrictMode>,
