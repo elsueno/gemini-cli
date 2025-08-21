@@ -266,6 +266,7 @@ const App = ({ config, settings, startupWarnings = [], version, httpPort, mcpPor
         httpServer.stop().catch(console.error);
       };
     }
+    return undefined;
   }, [httpPort, addItem]);
 
   // Initialize MCP server services if mcpPort is provided
@@ -308,6 +309,7 @@ const App = ({ config, settings, startupWarnings = [], version, httpPort, mcpPor
         mcpServer.stop().catch(console.error);
       };
     }
+    return undefined;
   }, [mcpPort, addItem]);
 
   useEffect(() => {

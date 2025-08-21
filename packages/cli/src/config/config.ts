@@ -234,12 +234,12 @@ export async function parseArguments(): Promise<CliArgs> {
         .option('http-port', {
           type: 'number',
           description: 'Start HTTP server on specified port for programmatic access',
-          default: process.env.GEMINI_HTTP_PORT ? parseInt(process.env.GEMINI_HTTP_PORT, 10) : undefined,
+          default: process.env['GEMINI_HTTP_PORT'] ? parseInt(process.env['GEMINI_HTTP_PORT'], 10) : undefined,
         })
         .option('mcp-port', {
           type: 'number',
           description: 'Start MCP server on specified port for Model Context Protocol access',
-          default: process.env.GEMINI_MCP_PORT ? parseInt(process.env.GEMINI_MCP_PORT, 10) : undefined,
+          default: process.env['GEMINI_MCP_PORT'] ? parseInt(process.env['GEMINI_MCP_PORT'], 10) : undefined,
         })
 
         .check((argv) => {

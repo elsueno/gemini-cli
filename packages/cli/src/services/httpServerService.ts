@@ -32,14 +32,15 @@ export class HttpServerService {
 
   private setupRoutes(): void {
     // POST /question - Submit a new question
-    this.app.post('/question', (req: Request, res: Response) => {
+    this.app.post('/question', (req: Request, res: Response): void => {
       try {
         const { text } = req.body;
         
         if (!text || typeof text !== 'string' || text.trim().length === 0) {
-          return res.status(400).json({ 
+          res.status(400).json({ 
             error: 'Invalid request: text field is required and must be non-empty string' 
           });
+          return;
         }
 
         const questionId = this.questionManager.submitQuestion(text.trim());
@@ -57,22 +58,24 @@ export class HttpServerService {
     });
 
     // GET /answer/:questionId - Get answer for a question
-    this.app.get('/answer/:questionId', (req: Request, res: Response) => {
+    this.app.get('/answer/:questionId', (req: Request, res: Response): void => {
       try {
         const { questionId } = req.params;
         
         if (!questionId || typeof questionId !== 'string') {
-          return res.status(400).json({ 
+          res.status(400).json({ 
             error: 'Invalid questionId format' 
           });
+          return;
         }
 
         const question = this.questionManager.getAnswer(questionId);
         
         if (!question) {
-          return res.status(404).json({ 
+          res.status(404).json({ 
             error: 'Question not found' 
           });
+          return;
         }
 
         res.json({
