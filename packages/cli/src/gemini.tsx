@@ -314,6 +314,7 @@ export async function main() {
             startupWarnings={startupWarnings}
             version={version}
             httpPort={argv.httpPort}
+            mcpPort={argv.mcpPort}
           />
         </SettingsContext.Provider>
       </React.StrictMode>,

@@ -103,6 +103,7 @@ import { appEvents, AppEvent } from '../utils/events.js';
 import { isNarrowWidth } from './utils/isNarrowWidth.js';
 import { QuestionManager } from '../services/questionManager.js';
 import { HttpServerService } from '../services/httpServerService.js';
+import { McpServerService } from '../services/mcpServerService.js';
 import { TuiIntegration } from '../services/tuiIntegration.js';
 
 const CTRL_EXIT_PROMPT_DURATION_MS = 1000;
@@ -115,6 +116,7 @@ interface AppProps {
   startupWarnings?: string[];
   version: string;
   httpPort?: number;
+  mcpPort?: number;
 }
 
 export const AppWrapper = (props: AppProps) => {
@@ -133,7 +135,7 @@ export const AppWrapper = (props: AppProps) => {
   );
 };
 
-const App = ({ config, settings, startupWarnings = [], version, httpPort }: AppProps) => {
+const App = ({ config, settings, startupWarnings = [], version, httpPort, mcpPort }: AppProps) => {
   const isFocused = useFocus();
   useBracketedPaste();
   const [updateInfo, setUpdateInfo] = useState<UpdateObject | null>(null);
@@ -219,6 +221,11 @@ const App = ({ config, settings, startupWarnings = [], version, httpPort }: AppP
   const httpServerRef = useRef<HttpServerService | null>(null);
   const tuiIntegrationRef = useRef<TuiIntegration | null>(null);
 
+  // MCP Server state
+  const mcpQuestionManagerRef = useRef<QuestionManager | null>(null);
+  const mcpServerRef = useRef<McpServerService | null>(null);
+  const mcpTuiIntegrationRef = useRef<TuiIntegration | null>(null);
+
   // Initialize HTTP server services if httpPort is provided
   useEffect(() => {
     if (httpPort) {
@@ -260,6 +267,48 @@ const App = ({ config, settings, startupWarnings = [], version, httpPort }: AppP
       };
     }
   }, [httpPort, addItem]);
+
+  // Initialize MCP server services if mcpPort is provided
+  useEffect(() => {
+    if (mcpPort) {
+      const mcpQuestionManager = new QuestionManager();
+      const mcpTuiIntegration = new TuiIntegration();
+      const mcpServer = new McpServerService(mcpPort, mcpQuestionManager);
+
+      // Wire up callbacks
+      mcpTuiIntegration.setCallbacks({
+        onResponseComplete: (questionId, response) => {
+          mcpQuestionManager.notifyResponseComplete(questionId, response);
+        },
+        onError: (questionId, error) => {
+          mcpQuestionManager.notifyError(questionId, error);
+        },
+      });
+
+      mcpServer.setSubmitHandler((text, questionId) => {
+        mcpTuiIntegration.submitQuestion(text, questionId);
+      });
+
+      // Store refs
+      mcpQuestionManagerRef.current = mcpQuestionManager;
+      mcpServerRef.current = mcpServer;
+      mcpTuiIntegrationRef.current = mcpTuiIntegration;
+
+      // Start server
+      mcpServer.start().catch((error) => {
+        console.error('Failed to start MCP server:', error);
+        addItem({
+          type: MessageType.ERROR,
+          text: `Failed to start MCP server on port ${mcpPort}: ${error.message}`,
+        }, Date.now());
+      });
+
+      // Cleanup on unmount
+      return () => {
+        mcpServer.stop().catch(console.error);
+      };
+    }
+  }, [mcpPort, addItem]);
 
   useEffect(() => {
     const unsubscribe = ideContext.subscribeToIdeContext(setIdeContextState);
@@ -691,12 +740,20 @@ const App = ({ config, settings, startupWarnings = [], version, httpPort }: AppP
     }
   }, [buffer, handleFinalSubmit]);
 
-  // Monitor streaming state for response completion
+  // Register TUI components with MCP integration
+  useEffect(() => {
+    if (mcpTuiIntegrationRef.current) {
+      mcpTuiIntegrationRef.current.registerInputPrompt(buffer, handleFinalSubmit);
+    }
+  }, [buffer, handleFinalSubmit]);
+
+  // Monitor streaming state for HTTP response completion
   const lastStreamingStateRef = useRef(streamingState);
   useEffect(() => {
     if (tuiIntegrationRef.current && lastStreamingStateRef.current !== StreamingState.Idle && streamingState === StreamingState.Idle) {
       // Response completed - capture the latest response from history
       const currentQuestionId = tuiIntegrationRef.current.getCurrentQuestionId();
+      console.log(`🔍 HTTP: Streaming completed, checking for HTTP question ID: ${currentQuestionId}`);
       if (currentQuestionId) {
         // Look for the most recent Gemini response (could be 'gemini' or 'gemini_content')
         let geminiResponse = null;
@@ -721,14 +778,59 @@ const App = ({ config, settings, startupWarnings = [], version, httpPort }: AppP
         }
 
         if (geminiResponse && responseText.trim()) {
-          console.log('Response completed for question:', currentQuestionId, 'Response:', responseText.trim());
-
+          console.log('HTTP Response completed for question:', currentQuestionId, 'Response length:', responseText.trim().length);
+          
           // Notify TUI integration which will call back to QuestionManager
           tuiIntegrationRef.current.notifyResponseComplete(currentQuestionId, responseText.trim());
+        } else {
+          console.log('HTTP: No response found or no active HTTP question ID');
         }
       }
     }
     lastStreamingStateRef.current = streamingState;
+  }, [streamingState, history]);
+
+  // Monitor streaming state for MCP response completion
+  const lastMcpStreamingStateRef = useRef(streamingState);
+  useEffect(() => {
+    if (mcpTuiIntegrationRef.current && lastMcpStreamingStateRef.current !== StreamingState.Idle && streamingState === StreamingState.Idle) {
+      // Response completed - capture the latest response from history for MCP
+      const currentQuestionId = mcpTuiIntegrationRef.current.getCurrentQuestionId();
+      console.log(`🔍 MCP: Streaming completed, checking for MCP question ID: ${currentQuestionId}`);
+      if (currentQuestionId) {
+        // Look for the most recent Gemini response
+        let geminiResponse = null;
+        let responseText = '';
+
+        // Search backwards through recent history items for Gemini responses
+        for (let i = history.length - 1; i >= 0; i--) {
+          const item = history[i];
+          if (item.type === 'gemini' || item.type === 'gemini_content') {
+            if (!geminiResponse) {
+              geminiResponse = item;
+              responseText = (item as any).text || '';
+            } else {
+              // If we find multiple gemini items, concatenate them (for streamed responses)
+              const additionalText = (item as any).text || '';
+              responseText = additionalText + ' ' + responseText;
+            }
+          } else if (item.type === 'user' || item.type === 'user_shell') {
+            // Stop when we hit the user's question to avoid going too far back
+            break;
+          }
+        }
+
+        if (geminiResponse && responseText.trim()) {
+          console.log('MCP Response completed for question:', currentQuestionId, 'Response length:', responseText.trim().length);
+
+          // Notify MCP TUI integration which will call back to MCP QuestionManager
+          mcpTuiIntegrationRef.current.notifyResponseComplete(currentQuestionId, responseText.trim());
+        } else {
+          console.log('MCP: No response found or no active MCP question ID');
+        }
+      }
+    }
+    lastMcpStreamingStateRef.current = streamingState;
   }, [streamingState, history]);
 
   const pendingHistoryItems = [...pendingSlashCommandHistoryItems];

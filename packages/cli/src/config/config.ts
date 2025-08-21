@@ -74,6 +74,7 @@ export interface CliArgs {
   proxy: string | undefined;
   includeDirectories: string[] | undefined;
   httpPort: number | undefined;
+  mcpPort: number | undefined;
 }
 
 export async function parseArguments(): Promise<CliArgs> {
@@ -234,6 +235,11 @@ export async function parseArguments(): Promise<CliArgs> {
           type: 'number',
           description: 'Start HTTP server on specified port for programmatic access',
           default: process.env.GEMINI_HTTP_PORT ? parseInt(process.env.GEMINI_HTTP_PORT, 10) : undefined,
+        })
+        .option('mcp-port', {
+          type: 'number',
+          description: 'Start MCP server on specified port for Model Context Protocol access',
+          default: process.env.GEMINI_MCP_PORT ? parseInt(process.env.GEMINI_MCP_PORT, 10) : undefined,
         })
 
         .check((argv) => {
