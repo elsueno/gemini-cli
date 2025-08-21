@@ -19,6 +19,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:ci": "vitest run --coverage",
+    "test:integration:http": "node src/integration-tests/http-client.test.js",
+    "test:integration:mcp": "node src/integration-tests/mcp-client.test.js",
     "typecheck": "tsc --noEmit"
   },
   "files": [
